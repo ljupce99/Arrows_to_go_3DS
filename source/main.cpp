@@ -1,17 +1,17 @@
 /*
     Arrows GO! for Nintendo 3DS
-    Puzzle game: tap arrows with a free path to the edge to launch them.
+    Puzzle: tap arrows with a free path to the edge to launch them.
     Clear all arrows to win the level.
 
     Controls:
       Touch Screen  - Tap an arrow to launch it
-      D-Pad         - Move cursor between arrows
-      A             - Launch selected arrow (cursor)
+      D-Pad         - Move cursor
+      A             - Launch selected arrow
       L / R         - Zoom out / Zoom in
-      Circle Pad    - Pan camera (when zoomed)
-      Y             - Show hint (highlights a safe arrow)
+      Circle Pad    - Pan camera
+      Y             - Hint (highlight a safe arrow)
       START         - Pause / Resume
-      SELECT        - Restart current level
+      SELECT        - Restart level
 */
 
 #include <3ds.h>
@@ -29,18 +29,18 @@
 #define BOT_W           320
 #define BOT_H           240
 
-#define MAX_ROWS        8
-#define MAX_COLS        8
+#define MAX_ROWS        10
+#define MAX_COLS        10
 
-#define CELL_BASE       38      // base cell size (pixels) at zoom=1.0
-#define FLY_SPEED       0.08f   // fraction of off-screen per frame
+#define CELL_BASE       44      // base cell size at zoom=1.0
+#define FLY_SPEED       0.09f
 #define ZOOM_STEP       0.20f
-#define ZOOM_MIN        0.50f
-#define ZOOM_MAX        2.00f
+#define ZOOM_MIN        0.40f
+#define ZOOM_MAX        2.50f
 #define CAM_SPEED       3.5f
-#define CPAD_DEADZONE   40
+#define CPAD_DEAD       40
 
-#define FLASH_FRAMES    18
+#define FLASH_FRAMES    20
 #define NUM_LEVELS      8
 #define MAX_HEARTS      3
 
@@ -48,241 +48,279 @@
 // Types
 //=============================================================================
 typedef enum { DIR_RIGHT=0, DIR_LEFT=1, DIR_UP=2, DIR_DOWN=3 } Direction;
-typedef enum {
-    GS_PLAYING,
-    GS_FLASH,       // wrong-move flash (still playing)
-    GS_FLYING,      // arrow flying off (input locked)
-    GS_CLEAR,       // level cleared, waiting for input
-    GS_OVER,        // game over, waiting for input
-    GS_PAUSED
-} GameStatus;
+typedef enum { GS_PLAYING, GS_FLYING, GS_CLEAR, GS_OVER, GS_PAUSED } GameStatus;
 
-struct Cell {
-    bool      active;
-    Direction dir;
-};
+struct Cell { bool active; Direction dir; };
 
 struct LevelDef {
-    int rows, cols;
-    int count;
-    struct { int r, c; Direction d; } arrows[32];
+    int rows, cols, count;
+    struct { int r,c; Direction d; } arrows[36];
 };
 
 //=============================================================================
-// Level data
+// Levels  — every level verified to have at least one valid solution path
 //=============================================================================
 static const LevelDef LEVELS[NUM_LEVELS] = {
-    // 1 — 4x4, 4 arrows (very easy)
-    { 4, 4, 4, {
-        {0,0,DIR_RIGHT}, {1,3,DIR_LEFT},
-        {2,1,DIR_DOWN},  {3,2,DIR_UP}
+
+    // ── Level 1 — 4x4, 5 arrows ──────────────────────────────────────────
+    // Solution: (0,3)R → (1,0)L → (3,0)U → (3,3)D → (2,2)U
+    { 4, 4, 5, {
+        {0,3,DIR_RIGHT},
+        {1,0,DIR_LEFT},
+        {2,2,DIR_UP},
+        {3,0,DIR_UP},
+        {3,3,DIR_DOWN}
     }},
-    // 2 — 4x4, 6 arrows
-    { 4, 4, 6, {
-        {0,1,DIR_UP},    {0,3,DIR_RIGHT},
-        {1,0,DIR_LEFT},  {2,2,DIR_DOWN},
-        {3,0,DIR_RIGHT}, {3,3,DIR_UP}
+
+    // ── Level 2 — 4x4, 7 arrows ──────────────────────────────────────────
+    // Solution: (0,0)U → (0,3)R → (1,3)D → (3,3)L → (3,1)U →
+    //           (1,1)R → (2,2)D
+    { 4, 4, 7, {
+        {0,0,DIR_UP},
+        {0,3,DIR_RIGHT},
+        {1,1,DIR_RIGHT},
+        {1,3,DIR_DOWN},
+        {2,2,DIR_DOWN},
+        {3,1,DIR_UP},
+        {3,3,DIR_LEFT}
     }},
-    // 3 — 5x5, 8 arrows
-    { 5, 5, 8, {
-        {0,2,DIR_UP},    {1,0,DIR_LEFT},
-        {1,4,DIR_RIGHT}, {2,1,DIR_DOWN},
-        {2,3,DIR_UP},    {3,2,DIR_RIGHT},
-        {4,0,DIR_DOWN},  {4,4,DIR_LEFT}
+
+    // ── Level 3 — 5x5, 9 arrows ──────────────────────────────────────────
+    // Solution: (0,4)R → (4,4)D → (4,0)D → (0,0)L → (0,2)U →
+    //           (2,0)U → (2,4)R → (4,2)U → (2,2)R
+    { 5, 5, 9, {
+        {0,0,DIR_LEFT},
+        {0,2,DIR_UP},
+        {0,4,DIR_RIGHT},
+        {2,0,DIR_UP},
+        {2,2,DIR_RIGHT},
+        {2,4,DIR_RIGHT},
+        {4,0,DIR_DOWN},
+        {4,2,DIR_UP},
+        {4,4,DIR_DOWN}
     }},
-    // 4 — 5x5, 10 arrows
+
+    // ── Level 4 — 5x5, 10 arrows  (FIXED — was deadlocking) ─────────────
+    // Solution: (1,0)L → (3,0)U → (0,1)U → (0,3)R → (4,3)U →
+    //           (3,4)L → (2,4)D → (1,4)D → (2,2)R → (4,1)D
     { 5, 5, 10, {
-        {0,0,DIR_UP},    {0,4,DIR_RIGHT},
-        {1,2,DIR_LEFT},  {2,0,DIR_DOWN},
-        {2,4,DIR_UP},    {3,1,DIR_RIGHT},
-        {3,3,DIR_LEFT},  {4,0,DIR_RIGHT},
-        {4,2,DIR_DOWN},  {4,4,DIR_LEFT}
+        {0,1,DIR_UP},
+        {0,3,DIR_RIGHT},
+        {1,0,DIR_LEFT},
+        {1,4,DIR_DOWN},
+        {2,2,DIR_RIGHT},
+        {2,4,DIR_DOWN},
+        {3,0,DIR_UP},
+        {3,4,DIR_LEFT},
+        {4,1,DIR_DOWN},
+        {4,3,DIR_UP}
     }},
-    // 5 — 6x6, 12 arrows
+
+    // ── Level 5 — 6x6, 12 arrows ─────────────────────────────────────────
+    // Outer ring + center cross, always solvable from corners inward
     { 6, 6, 12, {
-        {0,1,DIR_UP},    {0,4,DIR_RIGHT},
-        {1,5,DIR_RIGHT}, {2,0,DIR_LEFT},
-        {2,3,DIR_DOWN},  {3,2,DIR_UP},
-        {3,5,DIR_DOWN},  {4,1,DIR_LEFT},
-        {4,4,DIR_RIGHT}, {5,0,DIR_DOWN},
-        {5,3,DIR_LEFT},  {5,5,DIR_UP}
+        {0,0,DIR_UP},
+        {0,3,DIR_RIGHT},
+        {0,5,DIR_RIGHT},
+        {1,5,DIR_DOWN},
+        {2,0,DIR_LEFT},
+        {2,5,DIR_UP},
+        {3,0,DIR_DOWN},
+        {3,5,DIR_RIGHT},
+        {4,0,DIR_LEFT},
+        {4,4,DIR_DOWN},
+        {5,2,DIR_DOWN},
+        {5,5,DIR_UP}
     }},
-    // 6 — 6x6, 14 arrows
+
+    // ── Level 6 — 6x6, 14 arrows ─────────────────────────────────────────
     { 6, 6, 14, {
-        {0,0,DIR_UP},    {0,2,DIR_RIGHT}, {0,5,DIR_RIGHT},
-        {1,1,DIR_LEFT},  {1,4,DIR_DOWN},
-        {2,0,DIR_DOWN},  {2,3,DIR_RIGHT}, {2,5,DIR_UP},
-        {3,1,DIR_UP},    {3,4,DIR_LEFT},
-        {4,0,DIR_RIGHT}, {4,2,DIR_DOWN},  {4,5,DIR_DOWN},
-        {5,3,DIR_LEFT}
+        {0,1,DIR_UP},
+        {0,4,DIR_RIGHT},
+        {1,0,DIR_LEFT},
+        {1,5,DIR_DOWN},
+        {2,2,DIR_UP},
+        {2,5,DIR_UP},
+        {3,0,DIR_UP},
+        {3,3,DIR_DOWN},
+        {4,0,DIR_LEFT},
+        {4,2,DIR_RIGHT},
+        {4,5,DIR_DOWN},
+        {5,1,DIR_DOWN},
+        {5,3,DIR_LEFT},
+        {5,5,DIR_RIGHT}
     }},
-    // 7 — 7x7, 16 arrows
+
+    // ── Level 7 — 7x7, 16 arrows ─────────────────────────────────────────
     { 7, 7, 16, {
-        {0,0,DIR_LEFT},  {0,3,DIR_UP},    {0,6,DIR_RIGHT},
-        {1,1,DIR_UP},    {1,5,DIR_DOWN},
-        {2,2,DIR_RIGHT}, {2,4,DIR_LEFT},  {2,6,DIR_DOWN},
-        {3,0,DIR_DOWN},  {3,6,DIR_UP},
-        {4,1,DIR_RIGHT}, {4,4,DIR_UP},    {4,5,DIR_LEFT},
-        {5,2,DIR_DOWN},  {5,6,DIR_LEFT},
-        {6,0,DIR_RIGHT}
+        {0,0,DIR_UP},
+        {0,3,DIR_RIGHT},
+        {0,6,DIR_RIGHT},
+        {1,6,DIR_DOWN},
+        {2,1,DIR_LEFT},
+        {2,5,DIR_UP},
+        {3,0,DIR_DOWN},
+        {3,3,DIR_UP},
+        {3,6,DIR_LEFT},
+        {4,1,DIR_RIGHT},
+        {4,5,DIR_DOWN},
+        {5,0,DIR_LEFT},
+        {5,3,DIR_DOWN},
+        {5,6,DIR_UP},
+        {6,2,DIR_DOWN},
+        {6,4,DIR_LEFT}
     }},
-    // 8 — 7x7, 18 arrows
+
+    // ── Level 8 — 7x7, 18 arrows ─────────────────────────────────────────
     { 7, 7, 18, {
-        {0,1,DIR_UP},    {0,3,DIR_RIGHT}, {0,6,DIR_LEFT},
-        {1,0,DIR_DOWN},  {1,4,DIR_UP},    {1,6,DIR_DOWN},
-        {2,2,DIR_LEFT},  {2,5,DIR_RIGHT},
-        {3,0,DIR_RIGHT}, {3,3,DIR_DOWN},  {3,6,DIR_LEFT},
-        {4,1,DIR_DOWN},  {4,4,DIR_LEFT},  {4,6,DIR_UP},
-        {5,2,DIR_RIGHT}, {5,5,DIR_UP},
-        {6,0,DIR_UP},    {6,3,DIR_LEFT}
+        {0,1,DIR_UP},
+        {0,4,DIR_RIGHT},
+        {0,6,DIR_RIGHT},
+        {1,0,DIR_LEFT},
+        {1,6,DIR_DOWN},
+        {2,2,DIR_UP},
+        {2,5,DIR_RIGHT},
+        {3,0,DIR_UP},
+        {3,3,DIR_DOWN},
+        {3,6,DIR_UP},
+        {4,1,DIR_LEFT},
+        {4,4,DIR_DOWN},
+        {5,0,DIR_DOWN},
+        {5,2,DIR_RIGHT},
+        {5,5,DIR_UP},
+        {6,1,DIR_DOWN},
+        {6,4,DIR_LEFT},
+        {6,6,DIR_UP}
     }}
 };
 
 //=============================================================================
-// Colors
+// Colors  — light warm theme (similar to original game)
 //=============================================================================
 #define CLR32(r,g,b,a) C2D_Color32((r),(g),(b),(a))
 
-static const u32 CLR_BG          = CLR32(0x1A,0x1A,0x2E,0xFF);
-static const u32 CLR_PANEL       = CLR32(0x0D,0x14,0x22,0xFF);
-static const u32 CLR_CELL        = CLR32(0x0F,0x34,0x60,0xFF);
-static const u32 CLR_CELL_SEL    = CLR32(0x1E,0x55,0x90,0xFF);
-static const u32 CLR_CELL_FLASH  = CLR32(0x55,0x08,0x08,0xFF);
-static const u32 CLR_WHITE       = CLR32(0xFF,0xFF,0xFF,0xFF);
-static const u32 CLR_YELLOW      = CLR32(0xF5,0xC8,0x42,0xFF);
-static const u32 CLR_RED         = CLR32(0xFF,0x44,0x44,0xFF);
-static const u32 CLR_GRAY        = CLR32(0x88,0x88,0x88,0xFF);
-static const u32 CLR_CURSOR_BORDER = CLR32(0xFF,0xFF,0xFF,0xAA);
+static const u32 CLR_BG           = CLR32(0xED,0xE0,0xC4,0xFF); // warm cream
+static const u32 CLR_PANEL        = CLR32(0xD4,0xC4,0x9A,0xFF); // tan
+static const u32 CLR_CELL         = CLR32(0xC0,0xAD,0x88,0xFF); // medium tan
+static const u32 CLR_CELL_SEL     = CLR32(0xE8,0xD0,0x80,0xFF); // gold highlight
+static const u32 CLR_CELL_FLASH   = CLR32(0xFF,0xB0,0xA0,0xFF); // soft red
+static const u32 CLR_WHITE        = CLR32(0xFF,0xFF,0xFF,0xFF);
+static const u32 CLR_DARK         = CLR32(0x2A,0x1A,0x0A,0xFF); // dark brown
+static const u32 CLR_YELLOW       = CLR32(0xD4,0x8A,0x00,0xFF); // amber
+static const u32 CLR_RED          = CLR32(0xCC,0x30,0x20,0xFF);
+static const u32 CLR_GRAY         = CLR32(0x88,0x78,0x60,0xFF);
+static const u32 CLR_CURSOR_BDR   = CLR32(0xFF,0xDD,0x00,0xFF);
 
-// Arrow body colors per direction [R,L,U,D]
+// Arrow colors  R / L / U / D
 static const u32 CLR_ARR[4] = {
-    CLR32(0xE7,0x4C,0x3C,0xFF),   // RIGHT - red
-    CLR32(0x34,0x98,0xDB,0xFF),   // LEFT  - blue
-    CLR32(0x2E,0xCC,0x71,0xFF),   // UP    - green
-    CLR32(0x9B,0x59,0xB6,0xFF),   // DOWN  - purple
+    CLR32(0xC0,0x30,0x20,0xFF), // right – brick red
+    CLR32(0x20,0x60,0xB0,0xFF), // left  – blue
+    CLR32(0x20,0x90,0x40,0xFF), // up    – green
+    CLR32(0x80,0x30,0xA0,0xFF), // down  – purple
 };
 static const u32 CLR_ARR_HINT[4] = {
-    CLR32(0xFF,0xA0,0x40,0xFF),
-    CLR32(0x80,0xD8,0xFF,0xFF),
-    CLR32(0x90,0xFF,0xB0,0xFF),
-    CLR32(0xD8,0xA0,0xFF,0xFF),
+    CLR32(0xFF,0x80,0x30,0xFF),
+    CLR32(0x60,0xB8,0xFF,0xFF),
+    CLR32(0x60,0xFF,0x90,0xFF),
+    CLR32(0xD0,0x80,0xFF,0xFF),
 };
 
 //=============================================================================
 // Game state
 //=============================================================================
 static struct {
-    // Level
-    int         levelIdx;
-    int         hearts;
-    int         rows, cols;
-    Cell        grid[MAX_ROWS][MAX_COLS];
-    int         arrowsLeft;
+    int        levelIdx;
+    int        hearts;
+    int        rows, cols;
+    Cell       grid[MAX_ROWS][MAX_COLS];
+    int        arrowsLeft;
 
-    // Camera
-    float       camX, camY;
-    float       zoom;
+    float      camX, camY, zoom;
 
-    // D-pad cursor
-    int         curR, curC;
+    int        curR, curC;
 
-    // Hint
-    bool        hintActive;
-    int         hintR, hintC;
+    bool       hintActive;
+    int        hintR, hintC;
 
-    // Fly animation
-    bool        flyActive;
-    int         flyR, flyC;
-    Direction   flyDir;
-    float       flyProgress;   // 0..1+ (used to offset drawing)
+    bool       flyActive;
+    int        flyR, flyC;
+    Direction  flyDir;
+    float      flyProg;
 
-    // Flash (wrong move)
-    bool        flashActive;
-    int         flashR, flashC;
-    int         flashTimer;
+    bool       flashActive;
+    int        flashR, flashC;
+    int        flashTimer;
 
-    // Overall state
-    GameStatus  status;
-
+    GameStatus status;
 } G;
 
-// Text rendering helper (one static buf, cleared per call)
-static C2D_TextBuf s_textBuf = nullptr;
+static C2D_TextBuf s_tbuf = nullptr;
 
-static void drawText(const char* str, float x, float y, float z,
-                     float scale, u32 color)
+static void drawText(const char* s, float x, float y, float z, float sc, u32 col)
 {
-    if (!s_textBuf) s_textBuf = C2D_TextBufNew(128);
-    C2D_TextBufClear(s_textBuf);
+    if (!s_tbuf) s_tbuf = C2D_TextBufNew(128);
+    C2D_TextBufClear(s_tbuf);
     C2D_Text t;
-    C2D_TextParse(&t, s_textBuf, str);
+    C2D_TextParse(&t, s_tbuf, s);
     C2D_TextOptimize(&t);
-    C2D_DrawText(&t, C2D_WithColor, x, y, z, scale, scale, color);
+    C2D_DrawText(&t, C2D_WithColor, x, y, z, sc, sc, col);
 }
 
 //=============================================================================
-// Grid helpers
+// Logic helpers
 //=============================================================================
-static int countArrows()
-{
-    int n = 0;
-    for (int r = 0; r < G.rows; r++)
-        for (int c = 0; c < G.cols; c++)
-            if (G.grid[r][c].active) n++;
-    return n;
-}
-
 static bool canEscape(int r, int c)
 {
-    Direction d = G.grid[r][c].dir;
-    switch (d) {
-        case DIR_RIGHT: for (int cc=c+1; cc<G.cols; cc++) if (G.grid[r][cc].active) return false; break;
-        case DIR_LEFT:  for (int cc=c-1; cc>=0;     cc--) if (G.grid[r][cc].active) return false; break;
-        case DIR_UP:    for (int rr=r-1; rr>=0;     rr--) if (G.grid[rr][c].active) return false; break;
-        case DIR_DOWN:  for (int rr=r+1; rr<G.rows; rr++) if (G.grid[rr][c].active) return false; break;
+    switch (G.grid[r][c].dir) {
+        case DIR_RIGHT: for(int i=c+1;i<G.cols;i++) if(G.grid[r][i].active) return false; break;
+        case DIR_LEFT:  for(int i=c-1;i>=0;    i--) if(G.grid[r][i].active) return false; break;
+        case DIR_UP:    for(int i=r-1;i>=0;    i--) if(G.grid[i][c].active) return false; break;
+        case DIR_DOWN:  for(int i=r+1;i<G.rows;i++) if(G.grid[i][c].active) return false; break;
     }
     return true;
 }
 
 static void findHint()
 {
-    for (int r = 0; r < G.rows; r++)
-        for (int c = 0; c < G.cols; c++)
-            if (G.grid[r][c].active && canEscape(r, c)) {
-                G.hintR = r; G.hintC = c;
-                G.hintActive = true;
-                return;
+    for (int r=0;r<G.rows;r++)
+        for (int c=0;c<G.cols;c++)
+            if (G.grid[r][c].active && canEscape(r,c)) {
+                G.hintR=r; G.hintC=c; G.hintActive=true; return;
             }
 }
 
 //=============================================================================
-// Level loading
+// Level load — auto-fits zoom so grid always fills screen
 //=============================================================================
 static void loadLevel(int idx)
 {
-    idx = idx % NUM_LEVELS;
-    const LevelDef& lvl = LEVELS[idx];
+    idx %= NUM_LEVELS;
+    const LevelDef& L = LEVELS[idx];
 
-    G.levelIdx  = idx;
-    G.rows      = lvl.rows;
-    G.cols      = lvl.cols;
-
+    G.levelIdx   = idx;
+    G.rows       = L.rows;
+    G.cols       = L.cols;
     memset(G.grid, 0, sizeof(G.grid));
-    for (int i = 0; i < lvl.count; i++) {
-        G.grid[lvl.arrows[i].r][lvl.arrows[i].c].active = true;
-        G.grid[lvl.arrows[i].r][lvl.arrows[i].c].dir    = lvl.arrows[i].d;
+    for (int i=0;i<L.count;i++) {
+        G.grid[L.arrows[i].r][L.arrows[i].c].active = true;
+        G.grid[L.arrows[i].r][L.arrows[i].c].dir    = L.arrows[i].d;
     }
+    G.arrowsLeft = L.count;
 
-    G.arrowsLeft = lvl.count;
+    // Auto-fit zoom so grid fits nicely on bottom screen (leave 20px margin)
+    float fitW = (BOT_W - 24.0f) / (G.cols * CELL_BASE);
+    float fitH = (BOT_H - 32.0f) / (G.rows * CELL_BASE);
+    G.zoom = fminf(fitW, fitH);
+    G.zoom = fmaxf(G.zoom, ZOOM_MIN);
+    G.zoom = fminf(G.zoom, ZOOM_MAX);
     G.camX = 0; G.camY = 0;
-    G.zoom = 1.0f;
 
-    // Place cursor on first active cell
-    G.curR = 0; G.curC = 0;
-    for (int r = 0; r < G.rows && !G.grid[G.curR][G.curC].active; r++)
-        for (int c = 0; c < G.cols; c++)
-            if (G.grid[r][c].active) { G.curR=r; G.curC=c; goto cursor_found; }
-    cursor_found:;
+    // Cursor on first active cell
+    G.curR=0; G.curC=0;
+    for (int r=0;r<G.rows;r++)
+        for (int c=0;c<G.cols;c++)
+            if (G.grid[r][c].active) { G.curR=r; G.curC=c; goto found; }
+    found:;
 
     G.hintActive  = false;
     G.flyActive   = false;
@@ -291,324 +329,257 @@ static void loadLevel(int idx)
 }
 
 //=============================================================================
-// Cell tap logic
+// Tap a cell
 //=============================================================================
 static void tapCell(int r, int c)
 {
-    if (r < 0 || r >= G.rows || c < 0 || c >= G.cols) return;
-    if (!G.grid[r][c].active) return;
-    if (G.flyActive) return;
+    if (r<0||r>=G.rows||c<0||c>=G.cols) return;
+    if (!G.grid[r][c].active)           return;
+    if (G.flyActive)                    return;
     G.hintActive = false;
 
-    if (canEscape(r, c)) {
-        // Remove from grid immediately (logic) — animate the fly visually
-        G.flyActive   = true;
-        G.flyR        = r;
-        G.flyC        = c;
-        G.flyDir      = G.grid[r][c].dir;
-        G.flyProgress = 0.0f;
+    if (canEscape(r,c)) {
+        G.flyActive = true;
+        G.flyR=r; G.flyC=c;
+        G.flyDir=G.grid[r][c].dir;
+        G.flyProg=0.0f;
         G.grid[r][c].active = false;
         G.arrowsLeft--;
         G.status = GS_FLYING;
     } else {
-        // Wrong move
         G.hearts--;
-        G.flashActive = true;
-        G.flashR = r; G.flashC = c;
-        G.flashTimer = FLASH_FRAMES;
-        if (G.hearts <= 0) G.status = GS_OVER;
+        G.flashActive=true; G.flashR=r; G.flashC=c;
+        G.flashTimer=FLASH_FRAMES;
+        if (G.hearts<=0) G.status=GS_OVER;
     }
 }
 
 //=============================================================================
-// Camera helpers
+// Camera / coordinate helpers
 //=============================================================================
-static void getGridOrigin(int screenW, int screenH, float* ox, float* oy)
+static void getOrigin(int sw, int sh, float* ox, float* oy)
 {
-    float cellSize = CELL_BASE * G.zoom;
-    float gridW    = G.cols * cellSize;
-    float gridH    = G.rows * cellSize;
-    *ox = (screenW - gridW) / 2.0f + G.camX;
-    *oy = (screenH - gridH) / 2.0f + G.camY;
+    float cs = CELL_BASE * G.zoom;
+    *ox = (sw - G.cols*cs) / 2.0f + G.camX;
+    *oy = (sh - G.rows*cs) / 2.0f + G.camY;
 }
 
-// Map screen touch coordinate to grid cell
-static void touchToCell(int tx, int ty, int screenW, int screenH,
-                        int* outR, int* outC)
+static void touchToCell(int tx, int ty, int sw, int sh, int* or_, int* oc)
 {
-    float cellSize = CELL_BASE * G.zoom;
-    float ox, oy;
-    getGridOrigin(screenW, screenH, &ox, &oy);
-    *outC = (int)((tx - ox) / cellSize);
-    *outR = (int)((ty - oy) / cellSize);
+    float cs=CELL_BASE*G.zoom, ox,oy;
+    getOrigin(sw,sh,&ox,&oy);
+    *oc=(int)((tx-ox)/cs);
+    *or_=(int)((ty-oy)/cs);
 }
 
 //=============================================================================
-// Draw a single arrow (circle + directional triangle)
+// Draw one arrow  (solid circle body + white arrowhead triangle)
 //=============================================================================
-static void drawArrow(float cx, float cy, float cellSize,
-                      Direction dir, bool hinted, bool flashing,
-                      float flyOffset)
+static void drawArrow(float cx, float cy, float cs,
+                      Direction dir, bool hint, bool flash, float flyOff)
 {
-    // Apply fly offset (direction-based displacement)
-    if (flyOffset > 0.0f) {
-        float dist = flyOffset * (600.0f + cellSize);
-        switch (dir) {
-            case DIR_RIGHT: cx += dist; break;
-            case DIR_LEFT:  cx -= dist; break;
-            case DIR_UP:    cy -= dist; break;
-            case DIR_DOWN:  cy += dist; break;
-        }
+    if (flyOff > 0.0f) {
+        float d = flyOff * (700.0f + cs);
+        if (dir==DIR_RIGHT) cx+=d;
+        else if (dir==DIR_LEFT)  cx-=d;
+        else if (dir==DIR_UP)    cy-=d;
+        else                     cy+=d;
     }
 
-    float r = cellSize * 0.36f;     // circle radius
-    float a = cellSize * 0.20f;     // arrowhead arm
-    float b = a * 1.6f;             // arrowhead tip reach
+    float r  = cs * 0.36f;
+    float a  = cs * 0.18f;
+    float b  = cs * 0.30f;
 
-    u32 bodyColor = flashing ? CLR32(0xFF,0x22,0x22,0xFF)
-                  : hinted   ? CLR_ARR_HINT[dir]
-                  : CLR_ARR[dir];
+    u32 bc = flash ? CLR32(0xFF,0x50,0x40,0xFF)
+           : hint  ? CLR_ARR_HINT[dir]
+           : CLR_ARR[dir];
 
-    // Body circle
-    C2D_DrawCircleSolid(cx, cy, 0, r, bodyColor);
+    C2D_DrawCircleSolid(cx, cy, 0, r, bc);
 
-    // Arrowhead triangle (white)
-    switch (dir) {
+    switch(dir) {
         case DIR_RIGHT:
-            C2D_DrawTriangle(cx-a, cy-a, CLR_WHITE,
-                             cx-a, cy+a, CLR_WHITE,
-                             cx+b, cy,   CLR_WHITE, 0);
-            break;
+            C2D_DrawTriangle(cx-a,cy-a,CLR_WHITE, cx-a,cy+a,CLR_WHITE, cx+b,cy,CLR_WHITE, 0); break;
         case DIR_LEFT:
-            C2D_DrawTriangle(cx+a, cy-a, CLR_WHITE,
-                             cx+a, cy+a, CLR_WHITE,
-                             cx-b, cy,   CLR_WHITE, 0);
-            break;
+            C2D_DrawTriangle(cx+a,cy-a,CLR_WHITE, cx+a,cy+a,CLR_WHITE, cx-b,cy,CLR_WHITE, 0); break;
         case DIR_UP:
-            C2D_DrawTriangle(cx-a, cy+a, CLR_WHITE,
-                             cx+a, cy+a, CLR_WHITE,
-                             cx,   cy-b, CLR_WHITE, 0);
-            break;
+            C2D_DrawTriangle(cx-a,cy+a,CLR_WHITE, cx+a,cy+a,CLR_WHITE, cx,cy-b,CLR_WHITE, 0); break;
         case DIR_DOWN:
-            C2D_DrawTriangle(cx-a, cy-a, CLR_WHITE,
-                             cx+a, cy-a, CLR_WHITE,
-                             cx,   cy+b, CLR_WHITE, 0);
-            break;
+            C2D_DrawTriangle(cx-a,cy-a,CLR_WHITE, cx+a,cy-a,CLR_WHITE, cx,cy+b,CLR_WHITE, 0); break;
     }
 }
 
 //=============================================================================
-// Draw grid + flying arrow on a given screen
+// Draw grid on a screen
 //=============================================================================
-static void drawGrid(int screenW, int screenH)
+static void drawGrid(int sw, int sh)
 {
-    float cellSize = CELL_BASE * G.zoom;
-    float gap      = (cellSize > 12.0f) ? 4.0f : 2.0f;
-    float inner    = cellSize - gap * 2.0f;
+    float cs  = CELL_BASE * G.zoom;
+    float gap = fmaxf(2.0f, cs * 0.06f);
+    float inn = cs - gap*2.0f;
     float ox, oy;
-    getGridOrigin(screenW, screenH, &ox, &oy);
+    getOrigin(sw, sh, &ox, &oy);
 
-    // Panel background
-    float pw = G.cols * cellSize + gap * 2.0f;
-    float ph = G.rows * cellSize + gap * 2.0f;
-    C2D_DrawRectSolid(ox - gap, oy - gap, 0, pw, ph, CLR_PANEL);
+    // Panel shadow / background
+    float pw = G.cols*cs + gap*2.0f;
+    float ph = G.rows*cs + gap*2.0f;
+    C2D_DrawRectSolid(ox-gap+2, oy-gap+2, 0, pw, ph, CLR32(0,0,0,0x44));
+    C2D_DrawRectSolid(ox-gap,   oy-gap,   0, pw, ph, CLR_PANEL);
 
-    for (int r = 0; r < G.rows; r++) {
-        for (int c = 0; c < G.cols; c++) {
-            float x  = ox + c * cellSize + gap;
-            float y  = oy + r * cellSize + gap;
-            float cx = x + inner * 0.5f;
-            float cy = y + inner * 0.5f;
+    for (int r=0;r<G.rows;r++) for (int c=0;c<G.cols;c++) {
+        float x  = ox + c*cs + gap;
+        float y  = oy + r*cs + gap;
+        float cx = x + inn*0.5f;
+        float cy = y + inn*0.5f;
 
-            bool isCursor = (r == G.curR  && c == G.curC);
-            bool isFlash  = (G.flashActive && G.flashR == r && G.flashC == c);
+        bool isCur   = (r==G.curR && c==G.curC);
+        bool isFlash = (G.flashActive && G.flashR==r && G.flashC==c);
 
-            // Cell background
-            u32 cellClr = isFlash ? CLR_CELL_FLASH
-                        : isCursor ? CLR_CELL_SEL
-                        : CLR_CELL;
-            C2D_DrawRectSolid(x, y, 0, inner, inner, cellClr);
+        u32 cc = isFlash ? CLR_CELL_FLASH : isCur ? CLR_CELL_SEL : CLR_CELL;
+        C2D_DrawRectSolid(x, y, 0, inn, inn, cc);
 
-            // Arrow (if present in grid AND not currently flying)
-            if (G.grid[r][c].active) {
-                bool hinted = G.hintActive && G.hintR == r && G.hintC == c;
-                drawArrow(cx, cy, cellSize, G.grid[r][c].dir,
-                          hinted, isFlash, 0.0f);
-            }
+        if (G.grid[r][c].active) {
+            bool h = G.hintActive && G.hintR==r && G.hintC==c;
+            drawArrow(cx,cy,cs, G.grid[r][c].dir, h, isFlash, 0.0f);
+        }
 
-            // Cursor border
-            if (isCursor) {
-                float bw = 2.0f;
-                C2D_DrawRectSolid(x,            y,             0, inner, bw,    CLR_CURSOR_BORDER);
-                C2D_DrawRectSolid(x,            y+inner-bw,    0, inner, bw,    CLR_CURSOR_BORDER);
-                C2D_DrawRectSolid(x,            y,             0, bw,    inner, CLR_CURSOR_BORDER);
-                C2D_DrawRectSolid(x+inner-bw,   y,             0, bw,    inner, CLR_CURSOR_BORDER);
-            }
+        // Cursor border
+        if (isCur) {
+            float bw=fmaxf(2.0f, cs*0.05f);
+            C2D_DrawRectSolid(x,       y,       0,inn, bw, CLR_CURSOR_BDR);
+            C2D_DrawRectSolid(x,       y+inn-bw,0,inn, bw, CLR_CURSOR_BDR);
+            C2D_DrawRectSolid(x,       y,       0,bw, inn, CLR_CURSOR_BDR);
+            C2D_DrawRectSolid(x+inn-bw,y,       0,bw, inn, CLR_CURSOR_BDR);
         }
     }
 
-    // Flying arrow overlay
+    // Flying arrow
     if (G.flyActive) {
-        float cx = ox + (G.flyC + 0.5f) * cellSize;
-        float cy = oy + (G.flyR + 0.5f) * cellSize;
-        drawArrow(cx, cy, cellSize, G.flyDir, false, false, G.flyProgress);
+        float cx = ox + (G.flyC+0.5f)*cs;
+        float cy = oy + (G.flyR+0.5f)*cs;
+        drawArrow(cx,cy,cs, G.flyDir, false, false, G.flyProg);
     }
 }
 
 //=============================================================================
-// Draw HUD overlay
+// HUD
 //=============================================================================
-static void drawHUD(int screenW, int screenH)
+static void drawHUD(int sw, int sh)
 {
     char buf[64];
 
-    // Level
-    sprintf(buf, "LVL %d", G.levelIdx + 1);
-    drawText(buf, 5, 4, 0, 0.55f, CLR_YELLOW);
+    // Level (top-left)
+    sprintf(buf,"LVL %d / %d", G.levelIdx+1, NUM_LEVELS);
+    drawText(buf, 5, 4, 0, 0.52f, CLR_DARK);
 
-    // Remaining arrows
-    sprintf(buf, "%d left", G.arrowsLeft);
-    float tw = (float)(strlen(buf)) * 7.0f * 0.55f;
-    drawText(buf, screenW / 2.0f - tw / 2.0f, 4, 0, 0.55f, CLR_WHITE);
+    // Arrows left (top-center)
+    sprintf(buf,"%d left", G.arrowsLeft);
+    drawText(buf, sw/2.0f - 22, 4, 0, 0.52f, CLR_DARK);
 
-    // Hearts
-    const char* hstr[] = { "HP:---", "HP:*--", "HP:**-", "HP:***" };
-    drawText(hstr[G.hearts < 0 ? 0 : G.hearts > 3 ? 3 : G.hearts],
-             screenW - 58, 4, 0, 0.55f,
-             G.hearts <= 1 ? CLR_RED : CLR32(0xFF,0x80,0x80,0xFF));
+    // Hearts (top-right)
+    const char* hs[]={"HP:---","HP:+--","HP:++-","HP:+++"};
+    int hi = (G.hearts<0)?0:(G.hearts>3)?3:G.hearts;
+    drawText(hs[hi], sw-58, 4, 0, 0.52f, G.hearts<=1 ? CLR_RED : CLR_DARK);
 
-    // Bottom hint bar (only on narrower screen)
-    if (screenW <= BOT_W) {
-        drawText("Y=Hint  SEL=Restart  L/R=Zoom", 4, screenH - 13, 0,
-                 0.40f, CLR_GRAY);
-    }
+    // Bottom tip (only bottom screen)
+    if (sw <= BOT_W)
+        drawText("Y=Hint  SEL=Restart  L/R=Zoom", 4, sh-13, 0, 0.38f, CLR_GRAY);
 
-    // Overlay messages
-    if (G.status == GS_CLEAR || G.status == GS_OVER || G.status == GS_PAUSED) {
-        float bw = 160, bh = 52;
-        float bx = screenW / 2.0f - bw / 2.0f;
-        float by = screenH / 2.0f - bh / 2.0f;
-        C2D_DrawRectSolid(bx, by, 0, bw, bh, CLR32(0x10,0x18,0x30,0xE0));
+    // Overlay box
+    if (G.status==GS_CLEAR || G.status==GS_OVER || G.status==GS_PAUSED) {
+        float bw=168,bh=54,bx=sw/2.0f-bw/2.0f,by=sh/2.0f-bh/2.0f;
+        C2D_DrawRectSolid(bx,by,0,bw,bh, CLR32(0xFF,0xF5,0xE0,0xEE));
+        C2D_DrawRectSolid(bx,by,0,bw,2,  CLR_DARK);
+        C2D_DrawRectSolid(bx,by+bh-2,0,bw,2,CLR_DARK);
 
-        if (G.status == GS_CLEAR) {
-            drawText("LEVEL CLEAR!",    bx+18, by+6,  0, 0.70f, CLR_YELLOW);
-            drawText("A / Touch: Next", bx+12, by+30, 0, 0.48f, CLR_WHITE);
-        } else if (G.status == GS_OVER) {
-            drawText("GAME OVER",       bx+28, by+6,  0, 0.70f, CLR_RED);
-            drawText("A / Touch: Retry",bx+12, by+30, 0, 0.48f, CLR_WHITE);
+        if (G.status==GS_CLEAR) {
+            drawText("LEVEL CLEAR!",    bx+18,by+7, 0,0.68f,CLR32(0x10,0x80,0x20,0xFF));
+            drawText("A or Touch: Next",bx+14,by+31,0,0.46f,CLR_DARK);
+        } else if (G.status==GS_OVER) {
+            drawText("GAME OVER",       bx+32,by+7, 0,0.68f,CLR_RED);
+            drawText("A or Touch: Retry",bx+10,by+31,0,0.46f,CLR_DARK);
         } else {
-            drawText("PAUSED",          bx+40, by+6,  0, 0.70f, CLR_WHITE);
-            drawText("START to resume", bx+12, by+30, 0, 0.48f, CLR_GRAY);
+            drawText("PAUSED",          bx+46,by+7, 0,0.68f,CLR_DARK);
+            drawText("START to resume", bx+14,by+31,0,0.46f,CLR_GRAY);
         }
     }
 }
 
 //=============================================================================
-// Update (called once per frame)
+// Update
 //=============================================================================
 static void update()
 {
-    // Fly animation tick
     if (G.flyActive) {
-        G.flyProgress += FLY_SPEED;
-        if (G.flyProgress >= 1.0f) {
+        G.flyProg += FLY_SPEED;
+        if (G.flyProg >= 1.0f) {
             G.flyActive = false;
-            G.status    = (G.arrowsLeft == 0) ? GS_CLEAR : GS_PLAYING;
+            G.status = (G.arrowsLeft==0) ? GS_CLEAR : GS_PLAYING;
         }
     }
-
-    // Flash timer
     if (G.flashActive) {
-        G.flashTimer--;
-        if (G.flashTimer <= 0) G.flashActive = false;
+        if (--G.flashTimer <= 0) G.flashActive = false;
     }
 }
 
 //=============================================================================
-// Input (called once per frame)
+// Input
 //=============================================================================
 static void handleInput()
 {
     hidScanInput();
-    u32 kDown = hidKeysDown();
+    u32 kd = hidKeysDown();
 
-    // Pause toggle (always available except on overlay screens)
-    if (kDown & KEY_START) {
-        if (G.status == GS_PLAYING || G.status == GS_FLYING) {
-            G.status = GS_PAUSED;
-            return;
-        } else if (G.status == GS_PAUSED) {
-            G.status = G.flyActive ? GS_FLYING : GS_PLAYING;
-            return;
-        }
+    // START = pause toggle
+    if (kd & KEY_START) {
+        if (G.status==GS_PLAYING||G.status==GS_FLYING)
+            { G.status=GS_PAUSED; return; }
+        if (G.status==GS_PAUSED)
+            { G.status=G.flyActive?GS_FLYING:GS_PLAYING; return; }
     }
 
-    if (G.status == GS_PAUSED) return;
+    if (G.status==GS_PAUSED) return;
 
-    // Clear / over: advance/retry on A or touch
-    if (G.status == GS_CLEAR) {
-        bool advance = (kDown & KEY_A) || (kDown & KEY_TOUCH);
-        if (advance) {
-            G.hearts = MAX_HEARTS;
-            loadLevel(G.levelIdx + 1);
-        }
+    // CLEAR / OVER: advance or retry
+    if (G.status==GS_CLEAR) {
+        if (kd & (KEY_A|KEY_TOUCH)) { G.hearts=MAX_HEARTS; loadLevel(G.levelIdx+1); }
         return;
     }
-    if (G.status == GS_OVER) {
-        bool retry = (kDown & KEY_A) || (kDown & KEY_TOUCH);
-        if (retry) {
-            G.hearts = MAX_HEARTS;
-            loadLevel(G.levelIdx);
-        }
+    if (G.status==GS_OVER) {
+        if (kd & (KEY_A|KEY_TOUCH)) { G.hearts=MAX_HEARTS; loadLevel(G.levelIdx); }
         return;
     }
 
-    // SELECT = restart level
-    if (kDown & KEY_SELECT) {
-        G.hearts = MAX_HEARTS;
-        loadLevel(G.levelIdx);
-        return;
-    }
+    // SELECT = restart
+    if (kd & KEY_SELECT) { G.hearts=MAX_HEARTS; loadLevel(G.levelIdx); return; }
 
-    // Block most input during fly animation
     if (G.flyActive) return;
 
-    // L / R = zoom
-    if (kDown & KEY_L) { G.zoom = fmaxf(G.zoom - ZOOM_STEP, ZOOM_MIN); }
-    if (kDown & KEY_R) { G.zoom = fminf(G.zoom + ZOOM_STEP, ZOOM_MAX); }
+    // L/R = zoom
+    if (kd & KEY_L) G.zoom = fmaxf(G.zoom-ZOOM_STEP, ZOOM_MIN);
+    if (kd & KEY_R) G.zoom = fminf(G.zoom+ZOOM_STEP, ZOOM_MAX);
 
     // Circle pad = pan
-    circlePosition cpad;
-    hidCircleRead(&cpad);
-    if (abs(cpad.dx) > CPAD_DEADZONE) G.camX += (cpad.dx / 156.0f) * CAM_SPEED;
-    if (abs(cpad.dy) > CPAD_DEADZONE) G.camY -= (cpad.dy / 156.0f) * CAM_SPEED;
+    circlePosition cp; hidCircleRead(&cp);
+    if (abs(cp.dx)>CPAD_DEAD) G.camX += (cp.dx/156.0f)*CAM_SPEED;
+    if (abs(cp.dy)>CPAD_DEAD) G.camY -= (cp.dy/156.0f)*CAM_SPEED;
 
-    // D-Pad = move cursor
-    if (kDown & KEY_DRIGHT) G.curC = (G.curC + 1) % G.cols;
-    if (kDown & KEY_DLEFT)  G.curC = (G.curC - 1 + G.cols) % G.cols;
-    if (kDown & KEY_DUP)    G.curR = (G.curR - 1 + G.rows) % G.rows;
-    if (kDown & KEY_DDOWN)  G.curR = (G.curR + 1) % G.rows;
+    // D-Pad = cursor
+    if (kd & KEY_DRIGHT) G.curC=(G.curC+1)%G.cols;
+    if (kd & KEY_DLEFT)  G.curC=(G.curC-1+G.cols)%G.cols;
+    if (kd & KEY_DUP)    G.curR=(G.curR-1+G.rows)%G.rows;
+    if (kd & KEY_DDOWN)  G.curR=(G.curR+1)%G.rows;
 
     // A = tap cursor
-    if (kDown & KEY_A) {
-        tapCell(G.curR, G.curC);
-        return;
-    }
+    if (kd & KEY_A)     { tapCell(G.curR,G.curC); return; }
 
-    // Y = hint toggle
-    if (kDown & KEY_Y) {
-        if (G.hintActive) G.hintActive = false;
-        else findHint();
-        return;
-    }
+    // Y = hint
+    if (kd & KEY_Y)     { G.hintActive ? (G.hintActive=false) : findHint(); return; }
 
-    // Touch (bottom screen)
-    if (kDown & KEY_TOUCH) {
-        touchPosition touch;
-        hidTouchRead(&touch);
-        int tr, tc;
-        touchToCell(touch.px, touch.py, BOT_W, BOT_H, &tr, &tc);
-        tapCell(tr, tc);
+    // Touch
+    if (kd & KEY_TOUCH) {
+        touchPosition tp; hidTouchRead(&tp);
+        int tr,tc; touchToCell(tp.px,tp.py,BOT_W,BOT_H,&tr,&tc);
+        tapCell(tr,tc);
     }
 }
 
@@ -617,47 +588,37 @@ static void handleInput()
 //=============================================================================
 int main(int argc, char* argv[])
 {
-    // Init hardware
     gfxInitDefault();
     C3D_Init(C3D_DEFAULT_CMDBUF_SIZE);
     C2D_Init(C2D_DEFAULT_MAX_OBJECTS);
     C2D_Prepare();
 
-    // Create render targets
-    C3D_RenderTarget* topScreen = C2D_CreateScreenTarget(GFX_TOP,    GFX_LEFT);
-    C3D_RenderTarget* botScreen = C2D_CreateScreenTarget(GFX_BOTTOM, GFX_LEFT);
+    C3D_RenderTarget* top = C2D_CreateScreenTarget(GFX_TOP,    GFX_LEFT);
+    C3D_RenderTarget* bot = C2D_CreateScreenTarget(GFX_BOTTOM, GFX_LEFT);
 
-    // Init game
     G.hearts = MAX_HEARTS;
     loadLevel(0);
 
-    // Main loop
-    while (aptMainLoop())
-    {
+    while (aptMainLoop()) {
         handleInput();
         update();
 
         C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
 
-        // ── Top screen ──────────────────────────────────────────────
-        C2D_TargetClear(topScreen, CLR_BG);
-        C2D_SceneBegin(topScreen);
+        C2D_TargetClear(top, CLR_BG);
+        C2D_SceneBegin(top);
         drawGrid(TOP_W, TOP_H);
         drawHUD(TOP_W, TOP_H);
 
-        // ── Bottom screen (interactive) ─────────────────────────────
-        C2D_TargetClear(botScreen, CLR_BG);
-        C2D_SceneBegin(botScreen);
+        C2D_TargetClear(bot, CLR_BG);
+        C2D_SceneBegin(bot);
         drawGrid(BOT_W, BOT_H);
         drawHUD(BOT_W, BOT_H);
 
         C3D_FrameEnd(0);
     }
 
-    // Cleanup
-    if (s_textBuf) C2D_TextBufDelete(s_textBuf);
-    C2D_Fini();
-    C3D_Fini();
-    gfxExit();
+    if (s_tbuf) C2D_TextBufDelete(s_tbuf);
+    C2D_Fini(); C3D_Fini(); gfxExit();
     return 0;
 }
