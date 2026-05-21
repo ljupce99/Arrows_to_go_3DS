@@ -21,9 +21,4 @@ jobs:
           dkp-pacman -Syuu --noconfirm
           dkp-pacman -S --noconfirm 3ds-dev
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ArrowsGO-3dsx
-          path: "Arrows GO/ArrowsGO.3dsx"
-          if-no-files-found: error
+      
