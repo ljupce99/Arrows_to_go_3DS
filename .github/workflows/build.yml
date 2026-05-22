@@ -26,8 +26,7 @@ jobs:
 
       - name: Install 3DS dependencies
         run: |
-          dkp-pacman -Syuu --noconfirm
-          dkp-pacman -S --noconfirm 3ds-dev
+          dkp-pacman -S --noconfirm --needed 3ds-dev
 
       # Syntax / compile check on DEV
       - name: Compile check
