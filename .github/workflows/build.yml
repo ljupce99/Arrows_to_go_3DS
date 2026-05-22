@@ -34,13 +34,13 @@ jobs:
           make
 
       # Create tag only when pushing to main/master
-      - name: Create auto tag
-        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
-        run: |
-          TAG="v$(date +'%Y.%m.%d')-${GITHUB_RUN_NUMBER}"
+      # - name: Create auto tag
+      #   if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+      #   run: |
+      #     TAG="v$(date +'%Y.%m.%d')-${GITHUB_RUN_NUMBER}"
 
-          git config --global user.name "${{ secrets.USER_NAME_GITHUB_ACTIONS}}"
-          git config --global user.email "${{ secrets.USER_NAME_EMAIL_GITHUB_ACTIONS }}"
+      #     git config --global user.name "${{ secrets.USER_NAME_GITHUB_ACTIONS}}"
+      #     git config --global user.email "${{ secrets.USER_NAME_EMAIL_GITHUB_ACTIONS }}"
 
-          git tag $TAG
-          git push origin $TAG
+      #     git tag $TAG
+      #     git push origin $TAG
