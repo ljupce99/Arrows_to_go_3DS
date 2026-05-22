@@ -573,8 +573,15 @@ static void handleInput()
     if (kd & KEY_A)     { tapCell(G.curR,G.curC); return; }
 
     // Y = hint
-    if (kd & KEY_Y)     { G.hintActive ? (G.hintActive=false) : findHint(); return; }
+    if (kd & KEY_Y)
+    {
+        if (G.hintActive)
+            G.hintActive = false;
+        else
+            findHint();
 
+        return;
+    }
     // Touch
     if (kd & KEY_TOUCH) {
         touchPosition tp; hidTouchRead(&tp);
