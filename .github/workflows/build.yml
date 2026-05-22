@@ -2,13 +2,21 @@ name: Build ArrowsGO
 
 on:
   push:
-    branches: [ main, master ]
+    branches:
+      - dev
+      - main
+      - master
+
   pull_request:
-    branches: [ main, master ]
+    branches:
+      - dev
+      - main
+      - master
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
     container:
       image: devkitpro/devkitarm:latest
 
@@ -21,4 +29,19 @@ jobs:
           dkp-pacman -Syuu --noconfirm
           dkp-pacman -S --noconfirm 3ds-dev
 
-      
+      # Syntax / compile check on DEV
+      - name: Compile check
+        run: |
+          make
+
+      # Create tag only when pushing to main/master
+      - name: Create auto tag
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        run: |
+          TAG="v$(date +'%Y.%m.%d')-${GITHUB_RUN_NUMBER}"
+
+          git config --global user.name "${{ secrets.USER_NAME_GITHUB_ACTIONS}}"
+          git config --global user.email "${{ secrets.USER_NAME_EMAIL_GITHUB_ACTIONS }}"
+
+          git tag $TAG
+          git push origin $TAG
