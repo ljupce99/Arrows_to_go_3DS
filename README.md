@@ -2,6 +2,8 @@
 
 Arrows GO is a puzzle game for Nintendo 3DS where arrows are arranged on a grid, each pointing in a direction. The goal is to remove all arrows by launching them off the board. An arrow can only escape if its entire path to the edge is completely clear. Tap the wrong arrow and you lose a heart. Plan the order, clear the board.
 
+**Notice:** It is currently in the development phase.
+
 ---
 
 ## Controls
